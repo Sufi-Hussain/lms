@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -13,10 +14,10 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.5-flash"
     openai_api_key: str = ""
     gemini_api_key: str = ""
-    request_timeout_seconds: float = 20
-    max_message_chars: int = 4000
-    rate_limit_requests: int = 120
-    rate_limit_window_seconds: int = 60
+    request_timeout_seconds: float = Field(default=20, gt=0, le=120)
+    max_message_chars: int = Field(default=4000, ge=1, le=4000)
+    rate_limit_requests: int = Field(default=120, ge=1, le=10000)
+    rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
 
 @lru_cache
 def get_settings() -> Settings:

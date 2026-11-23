@@ -3,12 +3,12 @@ import math
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 
 
 class ModelAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    correct: bool
+    correct: StrictBool
     feedback: str = Field(min_length=1, max_length=2000)
 
 

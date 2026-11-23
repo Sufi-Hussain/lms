@@ -2,8 +2,12 @@
 
 import hashlib
 import json
+import uuid
+from datetime import datetime, timezone
+from urllib.parse import quote
 
 import frappe
+import requests
 from frappe import _
 from frappe.utils import get_datetime
 
@@ -12,6 +16,7 @@ SERVICE_ROLE = "AI Engine Service"
 ALLOWED_EVENT_FIELDS = {
     "event_id",
     "event_type",
+    "occurred_at",
     "concept_id",
     "correct",
     "attempts",
@@ -52,8 +57,24 @@ def _validate_text(value, label, maximum=140):
     return value.strip()
 
 
-def _authorized_access(student_id: str, school_id: str, course_id: str):
-    _require_service()
+def _validate_session_id(value):
+    try:
+        return str(uuid.UUID(_validate_text(value, "session", 36)))
+    except (ValueError, AttributeError, TypeError):
+        frappe.throw(_("Invalid session identifier"), frappe.ValidationError)
+
+
+def _parse_event_time(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp timezone is required")
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    except (AttributeError, TypeError, ValueError):
+        frappe.throw(_("Invalid assessment timestamp"), frappe.ValidationError)
+
+
+def _validate_student_course(student_id: str, school_id: str, course_id: str):
     student_id = _validate_text(student_id, "student")
     school_id = _validate_text(school_id, "school")
     course_id = _validate_text(course_id, "course")
@@ -69,6 +90,75 @@ def _authorized_access(student_id: str, school_id: str, course_id: str):
     ):
         frappe.throw(_("Student is not enrolled in this course"), frappe.PermissionError)
     return access_name
+
+
+def _authorized_access(student_id: str, school_id: str, course_id: str):
+    _require_service()
+    return _validate_student_course(student_id, school_id, course_id)
+
+
+def _require_student():
+    student_id = frappe.session.user
+    if student_id == "Guest" or not frappe.has_role("LMS Student"):
+        frappe.throw(_("Sign in with a student account to use the AI tutor"), frappe.PermissionError)
+    return _validate_text(student_id, "student")
+
+
+def _resolve_student_school(student_id: str, course_id: str, school_id: str | None = None) -> str:
+    course_id = _validate_text(course_id, "course")
+    filters = {"student": student_id, "course": course_id, "enabled": 1}
+    if school_id:
+        filters["school_id"] = _validate_text(school_id, "school")
+    schools = frappe.get_all(
+        "AI Student School Access",
+        filters=filters,
+        fields=["school_id"],
+        limit_page_length=2,
+    )
+    if not schools:
+        frappe.throw(_("Student is not enrolled in this school's course"), frappe.PermissionError)
+    if len(schools) > 1:
+        frappe.throw(_("Choose an authorized school context for this course"), frappe.ValidationError)
+    school_id = _validate_text(schools[0].school_id, "school")
+    _validate_student_course(student_id, school_id, course_id)
+    return school_id
+
+
+def _call_engine(method: str, path: str, *, payload: dict | None = None, params: dict | None = None):
+    base_url = (frappe.conf.get("ai_engine_url") or "http://ai-engine:8001").rstrip("/")
+    token = frappe.conf.get("ai_engine_service_token")
+    if not token:
+        frappe.throw(_("AI tutor integration is not configured"), frappe.ValidationError)
+    try:
+        response = requests.request(
+            method,
+            f"{base_url}{path}",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            json=payload,
+            params=params,
+            timeout=(3, 25),
+        )
+    except requests.Timeout as exc:
+        frappe.log_error("AI Engine request timed out", "AI Engine Integration")
+        frappe.throw(_("The AI tutor is temporarily unavailable"), frappe.ValidationError)
+    except requests.RequestException as exc:
+        frappe.log_error(f"AI Engine request failed ({type(exc).__name__})", "AI Engine Integration")
+        frappe.throw(_("The AI tutor is temporarily unavailable"), frappe.ValidationError)
+    if response.status_code >= 400:
+        frappe.log_error(f"AI Engine returned HTTP {response.status_code}", "AI Engine Integration")
+        if response.status_code == 409:
+            frappe.throw(_("This lesson has changed. Resume it before submitting another answer"), frappe.ValidationError)
+        if response.status_code in {401, 403, 404}:
+            frappe.throw(_("This lesson is not available for your account"), frappe.PermissionError)
+        frappe.throw(_("The AI tutor could not complete this request"), frappe.ValidationError)
+    try:
+        result = response.json()
+    except ValueError as exc:
+        frappe.log_error("AI Engine returned invalid JSON", "AI Engine Integration")
+        frappe.throw(_("The AI tutor returned an invalid response"), frappe.ValidationError)
+    if not isinstance(result, dict):
+        frappe.throw(_("The AI tutor returned an invalid response"), frappe.ValidationError)
+    return result
 
 
 @frappe.whitelist(methods=["POST"])
@@ -159,6 +249,7 @@ def save_tutor_session(
     snapshot: dict,
 ):
     _authorized_access(student_id, school_id, course_id)
+    session_id = _validate_session_id(session_id)
     if isinstance(snapshot, str):
         try:
             snapshot = json.loads(snapshot)
@@ -212,7 +303,7 @@ def get_tutor_session(
     _require_service()
     school_id = _validate_text(school_id, "school")
     student_id = _validate_text(student_id, "student")
-    session_id = _validate_text(session_id, "session")
+    session_id = _validate_session_id(session_id)
     row = frappe.db.get_value(
         "AI Tutor Session",
         {"session_id": session_id, "school_id": school_id, "student": student_id},
@@ -242,11 +333,16 @@ def _update_profile(school_id: str, student_id: str, course_id: str, session_id:
         or correct_attempts < 0
         or correct_attempts > attempts
         or correct_streak < 0
+        or type(event.get("correct")) is not bool
+        or type(event.get("completed")) is not bool
         or event.get("mastery_status") not in {"needs_review", "developing", "mastered"}
-        or not isinstance(event.get("score"), (int, float))
+        or type(event.get("score")) not in {int, float}
         or not 0 <= event["score"] <= 1
+        or not isinstance(event.get("occurred_at"), str)
     ):
         frappe.throw(_("Invalid assessment progress"), frappe.ValidationError)
+    event_time = _parse_event_time(event["occurred_at"])
+
 
     profile_key = hashlib.sha256(f"{school_id}\0{student_id}".encode()).hexdigest()
     profile_name = frappe.db.get_value("AI Student Learning Profile", {"profile_key": profile_key}, "name")
@@ -267,24 +363,28 @@ def _update_profile(school_id: str, student_id: str, course_id: str, session_id:
         concept = {"concept_id": concept_id, "attempts": 0, "correct_attempts": 0, "sessions": {}}
         concepts.append(concept)
 
-    in_progress = concept.setdefault("sessions", {})
-    previous = in_progress.get(session_id, {"attempts": 0, "correct_attempts": 0})
-    concept["attempts"] = max(0, concept.get("attempts", 0) + attempts - previous["attempts"])
-    concept["correct_attempts"] = max(
-        0, concept.get("correct_attempts", 0) + correct_attempts - previous["correct_attempts"]
-    )
-    if not event.get("completed"):
-        in_progress[session_id] = {"attempts": attempts, "correct_attempts": correct_attempts}
-    else:
-        in_progress.pop(session_id, None)
-    concept.update(
-        {
-            "course_id": course_id,
-            "correct_streak": correct_streak,
-            "score": round(concept["correct_attempts"] / max(concept["attempts"], 1), 4),
-            "status": event["mastery_status"],
-        }
-    )
+    session_progress = concept.setdefault("sessions", {})
+    previous = session_progress.get(session_id, {"attempts": 0, "correct_attempts": 0})
+    attempt_delta = max(0, attempts - previous["attempts"])
+    correct_delta = max(0, correct_attempts - previous["correct_attempts"])
+    concept["attempts"] = max(0, concept.get("attempts", 0) + attempt_delta)
+    concept["correct_attempts"] = max(0, concept.get("correct_attempts", 0) + correct_delta)
+    session_progress[session_id] = {
+        "attempts": max(attempts, previous["attempts"]),
+        "correct_attempts": max(correct_attempts, previous["correct_attempts"]),
+        "completed": bool(event["completed"] or previous.get("completed", False)),
+    }
+    latest_event_time = _parse_event_time(concept["latest_event_at"]) if concept.get("latest_event_at") else None
+    if latest_event_time is None or event_time >= latest_event_time:
+        concept.update(
+            {
+                "course_id": course_id,
+                "correct_streak": correct_streak,
+                "status": event["mastery_status"],
+                "latest_event_at": event["occurred_at"],
+            }
+        )
+    concept["score"] = round(concept["correct_attempts"] / max(concept["attempts"], 1), 4)
 
     progress_by_concept = {item.get("concept_id"): item for item in concepts}
     curriculum = frappe.get_all(
@@ -325,7 +425,7 @@ def save_tutor_event(
     event: dict,
 ):
     _authorized_access(student_id, school_id, course_id)
-    session_id = _validate_text(session_id, "session", 140)
+    session_id = _validate_session_id(session_id)
     if isinstance(event, str):
         try:
             event = json.loads(event)
@@ -409,3 +509,131 @@ def get_learning_profile(student_id: str, school_id: str):
         for concept in profile.get("concepts", [])
     ]
     return profile
+
+
+def _student_session_scope(session_id: str, course_id: str, school_id: str | None):
+    student_id = _require_student()
+    session_id = _validate_session_id(session_id)
+    course_id = _validate_text(course_id, "course", 140)
+    school_id = _resolve_student_school(student_id, course_id, school_id)
+    return student_id, school_id, course_id, session_id
+
+
+@frappe.whitelist(methods=["POST"])
+def start_tutor_lesson(
+    course_id: str,
+    subject: str,
+    chapter: str,
+    topic: str,
+    school_id: str | None = None,
+    language: str = "en",
+):
+    student_id = _require_student()
+    school_id = _resolve_student_school(student_id, course_id, school_id)
+    payload = {
+        "student_id": student_id,
+        "school_id": school_id,
+        "course_id": _validate_text(course_id, "course", 140),
+        "subject": _validate_text(subject, "subject", 80),
+        "chapter": _validate_text(chapter, "chapter", 140),
+        "topic": _validate_text(topic, "topic", 200),
+        "language": _validate_text(language, "language", 24),
+    }
+    return _call_engine("POST", "/api/v1/sessions", payload=payload)
+
+
+@frappe.whitelist(methods=["POST"])
+def submit_tutor_answer(
+    session_id: str,
+    course_id: str,
+    question_id: str,
+    answer: str,
+    school_id: str | None = None,
+):
+    student_id, school_id, _, session_id = _student_session_scope(session_id, course_id, school_id)
+    return _call_engine(
+        "POST",
+        f"/api/v1/sessions/{session_id}/answer",
+        payload={
+            "question_id": _validate_text(question_id, "question", 140),
+            "answer": _validate_text(answer, "answer", 4000),
+        },
+        params={"student_id": student_id, "school_id": school_id},
+    )
+
+
+@frappe.whitelist(methods=["POST"])
+def send_tutor_message(
+    session_id: str,
+    course_id: str,
+    text: str,
+    school_id: str | None = None,
+):
+    student_id, school_id, _, session_id = _student_session_scope(session_id, course_id, school_id)
+    return _call_engine(
+        "POST",
+        f"/api/v1/sessions/{session_id}/message",
+        payload={"text": _validate_text(text, "message", 4000)},
+        params={"student_id": student_id, "school_id": school_id},
+    )
+
+
+@frappe.whitelist(methods=["POST"])
+def request_tutor_hint(session_id: str, course_id: str, school_id: str | None = None):
+    student_id, school_id, _, session_id = _student_session_scope(session_id, course_id, school_id)
+    return _call_engine(
+        "POST",
+        f"/api/v1/sessions/{session_id}/hint",
+        params={"student_id": student_id, "school_id": school_id},
+    )
+
+
+@frappe.whitelist(methods=["POST"])
+def resume_tutor_lesson(session_id: str, course_id: str, school_id: str | None = None):
+    student_id, school_id, _, session_id = _student_session_scope(session_id, course_id, school_id)
+    return _call_engine(
+        "POST",
+        f"/api/v1/sessions/{session_id}/resume",
+        params={"student_id": student_id, "school_id": school_id},
+    )
+
+
+@frappe.whitelist(methods=["GET"])
+def get_student_tutor_session(session_id: str, course_id: str, school_id: str | None = None):
+    student_id, school_id, _, session_id = _student_session_scope(session_id, course_id, school_id)
+    return _call_engine(
+        "GET",
+        f"/api/v1/sessions/{session_id}",
+        params={"student_id": student_id, "school_id": school_id},
+    )
+
+
+@frappe.whitelist(methods=["GET"])
+def get_student_learning_profile(school_id: str | None = None):
+    student_id = _require_student()
+    filters = {"student": student_id, "enabled": 1}
+    if school_id:
+        filters["school_id"] = _validate_text(school_id, "school")
+    accesses = frappe.get_all(
+        "AI Student School Access",
+        filters=filters,
+        fields=["school_id", "course"],
+        limit_page_length=100,
+    )
+    enrolled_schools = {
+        item.school_id
+        for item in accesses
+        if frappe.db.exists(
+            "LMS Enrollment", {"member": student_id, "course": item.course, "member_type": "Student"}
+        )
+    }
+    if not enrolled_schools:
+        frappe.throw(_("No authorized school profile is available"), frappe.PermissionError)
+    if len(enrolled_schools) > 1:
+        frappe.throw(_("Choose an authorized school context"), frappe.ValidationError)
+    selected_school = next(iter(enrolled_schools))
+    return _call_engine(
+        "GET",
+        f"/api/v1/students/{quote(student_id, safe='')}/learning-profile",
+        params={"school_id": selected_school},
+    )

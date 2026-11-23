@@ -34,12 +34,14 @@ The service binds to internal port `8001` and publishes no host port. It joins t
 
 1. Create the proposed DocTypes from `frappe_integration/proposed_doctypes.json`, reviewing their permissions and retention policy first.
 2. Create the dedicated `AI Engine Service` role and integration user. Grant only the roles/permissions required by the custom bridge; generate that user's Frappe API key and secret.
-3. Copy `frappe_integration/ai_integration.py` to `lms/lms/ai_integration.py` (or the equivalent module in your Frappe app), run the app's migration/reload steps, and verify the whitelisted methods from the private Docker network.
-4. Populate `AI Student School Access` from the authoritative school membership system, create enabled `AI Curriculum Concept` records linked to real `LMS Course` and `Course Chapter` records, and curate `AI Educational Resource` rows. Only set `embedding_allowed` for resources approved for display.
-5. Configure `FRAPPE_URL`, `FRAPPE_API_KEY`, and `FRAPPE_API_SECRET` in the engine's private environment. Never add them to frontend code or commit `.env`.
-6. In the Frappe server-side endpoint that calls the engine, derive student, school, course, subject, chapter, and topic from the authenticated user and authorized LMS records. Do not proxy client-supplied identity fields without checking them.
+3. Copy `frappe_integration/ai_integration.py` to `lms/lms/ai_integration.py` (or the equivalent module in your Frappe app), run the app's migration/reload steps, and verify the whitelisted bridge methods from the private Docker network.
+4. Populate `AI Student School Access` from authoritative school membership data, create enabled `AI Curriculum Concept` records linked to real `LMS Course` and `Course Chapter` records, and curate `AI Educational Resource` rows. Only set `embedding_allowed` for resources approved for display.
+5. Configure `FRAPPE_URL`, `FRAPPE_API_KEY`, and `FRAPPE_API_SECRET` in the engine's private environment. Store matching `ai_engine_url` and `ai_engine_service_token` values in Frappe's private site configuration. Never add credentials to frontend code or commit `.env` / `site_config.json`.
+6. The sample authenticated Frappe methods `start_tutor_lesson`, `submit_tutor_answer`, `send_tutor_message`, `request_tutor_hint`, `resume_tutor_lesson`, `get_student_tutor_session`, and `get_student_learning_profile` derive the student from `frappe.session.user` and check the supplied course/school against both the trusted school mapping and existing `LMS Enrollment`. Use these methods from the Frappe frontend with `frappe.call`; do not proxy client-supplied student IDs or trust a school ID without server-side validation.
 
 The bridge validates `LMS Enrollment` and the custom school-access mapping on lesson start and every session/profile access. The engine also rechecks Frappe authorization before actions on locally cached sessions. Session snapshots and sanitized conversation history are private; the custom session DocType must remain restricted to administrators and the integration service.
+
+The engine-to-LMS adapter calls `get_tutor_context`, `authorize_tutor_student`, `save_tutor_session`, `get_tutor_session`, `save_tutor_event`, and `get_learning_profile` using the dedicated integration user. These whitelisted methods require the `AI Engine Service` role, check `LMS Enrollment` plus the school-access mapping, and return only published curriculum and approved resources. The Frappe methods invoked by the student-facing app derive the learner from the authenticated Frappe session; service credentials stay in Frappe's private site config and the engine's private environment.
 
 ## API contract
 

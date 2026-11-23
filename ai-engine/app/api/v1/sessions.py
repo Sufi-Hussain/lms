@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import enforce_rate_limit
 from app.core.security import require_service_token
@@ -23,6 +24,14 @@ router = APIRouter(
 )
 frappe_client = FrappeClient()
 orchestrator = TutorOrchestrator(frappe_client)
+
+
+def _validate_message_length(value: str) -> None:
+    if len(value) > settings.max_message_chars:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "message_too_long", "message": "The message exceeds the configured length limit"},
+        )
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -55,6 +64,7 @@ def _progress_event(session: TutorSession, event_type: str, response: TutorRespo
     return {
         "event_id": str(uuid.uuid4()),
         "event_type": event_type,
+        "occurred_at": session.updated_at.isoformat(),
         "concept_id": str(session.context.get("concept_id", session.topic)),
         "correct": response.correct,
         "attempts": mastery.attempts if mastery else session.attempts,
@@ -218,6 +228,7 @@ async def message(
     student_id: str = Query(min_length=1, max_length=140),
     db: Session = Depends(get_db),
 ):
+    _validate_message_length(payload.text)
     session = await _load_owned_session(db, session_id, school_id, student_id, for_update=True)
     try:
         response = await orchestrator.message(db, session, payload.text)
@@ -238,6 +249,7 @@ async def answer(
     student_id: str = Query(min_length=1, max_length=140),
     db: Session = Depends(get_db),
 ):
+    _validate_message_length(payload.answer)
     session = await _load_owned_session(db, session_id, school_id, student_id, for_update=True)
     try:
         response = await orchestrator.answer(db, session, payload.question_id, payload.answer)
