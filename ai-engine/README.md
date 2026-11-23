@@ -1,45 +1,62 @@
 # AI STEM Teaching Engine
 
-Standalone FastAPI service for the LMS tutoring workflow. It provides versioned session, profile, message, answer, hint, and resume endpoints; a persisted interaction history; configurable OpenAI/Gemini-compatible generation; and a local mock provider for integration testing. It does not modify the frontend build.
+A standalone FastAPI tutoring service for the existing Frappe LMS app in this repository. The service owns short-lived orchestration state; Frappe remains authoritative for LMS users, school/course access, curriculum, approved resources, and learning profiles. Student-facing clients must call Frappe, which authenticates the learner and calls this service server-to-server.
 
-## Run locally
+## Verified LMS assumptions
+
+This repository contains the upstream `LMS Enrollment` DocType with `member`, `course`, and `member_type` fields, and `Course Chapter` linked to `LMS Course`. It does not contain the proposed school, curriculum-concept, resource, tutor-session, or learner-profile DocTypes. Their definitions are in `frappe_integration/proposed_doctypes.json`; review and install them in the Frappe app before enabling the sample adapter. The sample bridge adds `lms/lms/ai_integration.py` and relies on a trusted `AI Student School Access` mapping for each student-school-course enrollment. Populate that mapping from your authoritative school membership data; do not infer school membership from a request.
+
+## Local development
 
 ```sh
 cd ai-engine
 cp .env.example .env
-# Set SERVICE_TOKEN to a random secret. Keep it private.
-python -m venv .venv && . .venv/bin/activate
+# Set SERVICE_TOKEN and Frappe credentials; keep .env private.
+python -m venv .venv
+. .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8100
+uvicorn app.main:app --reload --port 8001
 ```
 
-Set `LLM_PROVIDER=mock` to run without model credentials, `openai` with `OPENAI_API_KEY`, or `gemini` with `GEMINI_API_KEY`. `DATABASE_URL` defaults to SQLite for local development; use a PostgreSQL URL for shared deployments. Health: `GET /api/v1/health`. OpenAPI: `/docs`.
+The default `LLM_PROVIDER=mock` requires no model key and is for development/testing only. Set `LLM_PROVIDER=openai` with `OPENAI_API_KEY`, or `LLM_PROVIDER=gemini` with `GEMINI_API_KEY`. Provider/model names and request timeouts are environment-configurable. SQLite is for local/single-instance development; configure PostgreSQL for a shared deployment. Health is `GET /api/v1/health`; OpenAPI docs are available at `/docs`. The docs route is not separately authenticated, so keep the service and documentation on a private network.
 
 ## Docker Compose
 
-From the `ai-engine/` directory, copy `.env.example` to `.env`, set a strong `SERVICE_TOKEN`, then run `docker compose -f docker-compose.ai-engine.yml up -d --build`. Set `FRAPPE_DOCKER_NETWORK` in the Compose environment to the existing network name (for this repo's `name: lms` compose project that is normally `lms_default`; verify with `docker network ls` for your deployment). The service attaches to that external network and resolves Frappe at `http://frappe:8000`; it has no published host port. This separate compose file does not modify existing Frappe services.
+From `ai-engine/`, copy `.env.example` to `.env`; configure a long random `SERVICE_TOKEN`, the dedicated Frappe API key/secret, and the existing Frappe Compose network. For this repository's Compose project name `lms`, the default network is normally `lms_default`; verify the actual network name in your deployment. Then run:
+
+```sh
+docker compose -f docker-compose.ai-engine.yml up -d --build
+```
+
+The service binds to internal port `8001` and publishes no host port. It joins the existing network and calls `http://frappe:8000`; it does not create duplicate MariaDB or Redis services. The SQLite data volume is intended only for a single instance. Use a managed/shared PostgreSQL database before running multiple replicas.
+
+## Frappe setup
+
+1. Create the proposed DocTypes from `frappe_integration/proposed_doctypes.json`, reviewing their permissions and retention policy first.
+2. Create the dedicated `AI Engine Service` role and integration user. Grant only the roles/permissions required by the custom bridge; generate that user's Frappe API key and secret.
+3. Copy `frappe_integration/ai_integration.py` to `lms/lms/ai_integration.py` (or the equivalent module in your Frappe app), run the app's migration/reload steps, and verify the whitelisted methods from the private Docker network.
+4. Populate `AI Student School Access` from the authoritative school membership system, create enabled `AI Curriculum Concept` records linked to real `LMS Course` and `Course Chapter` records, and curate `AI Educational Resource` rows. Only set `embedding_allowed` for resources approved for display.
+5. Configure `FRAPPE_URL`, `FRAPPE_API_KEY`, and `FRAPPE_API_SECRET` in the engine's private environment. Never add them to frontend code or commit `.env`.
+6. In the Frappe server-side endpoint that calls the engine, derive student, school, course, subject, chapter, and topic from the authenticated user and authorized LMS records. Do not proxy client-supplied identity fields without checking them.
+
+The bridge validates `LMS Enrollment` and the custom school-access mapping on lesson start and every session/profile access. The engine also rechecks Frappe authorization before actions on locally cached sessions. Session snapshots and sanitized conversation history are private; the custom session DocType must remain restricted to administrators and the integration service.
 
 ## API contract
 
-All `/api/v1` endpoints other than health require `Authorization: Bearer <SERVICE_TOKEN>`. This is service-to-service authentication; do not expose the engine directly to browsers or treat this static token as student authentication. The trusted LMS backend must authenticate the learner, derive `school_id`, `student_id`, and course access from its own session, and call this service server-side. Scope every session lookup by the server-derived school. Keep the engine on a private network, add an edge rate limit, and rotate the token.
+Except for health, endpoints require `Authorization: Bearer <SERVICE_TOKEN>`. This credential authenticates the Frappe service, not a student, and must never be sent to browsers. Use the backend-derived `school_id` and `student_id` on session read/action routes.
 
-- `POST /api/v1/sessions`: `{student_id, school_id, course_id, subject, chapter, topic, language?}`. With `FRAPPE_URL` configured, retrieves server-owned curriculum from `lms.ai_integration.get_tutor_context`.
-- `GET /api/v1/sessions/{id}?school_id=...`: resume-safe persisted session state.
-- `POST /api/v1/sessions/{id}/message?school_id=...`: `{text}`.
-- `POST /api/v1/sessions/{id}/answer?school_id=...`: `{question_id, answer}`; question IDs prevent stale answer submissions.
-- `POST /api/v1/sessions/{id}/hint?school_id=...` and `/resume?school_id=...`.
-- `GET /api/v1/students/{id}/learning-profile?school_id=...`: proxies the LMS-owned profile endpoint.
+- `POST /api/v1/sessions` — `{student_id, school_id, course_id, subject, chapter, topic, language?}`; fetches the published learning objective and approved resources from Frappe.
+- `GET /api/v1/sessions/{session_id}?school_id=...&student_id=...` — returns a scoped persisted session.
+- `POST /api/v1/sessions/{session_id}/message?school_id=...&student_id=...` — `{text}`.
+- `POST /api/v1/sessions/{session_id}/answer?school_id=...&student_id=...` — `{question_id, answer}`; stale question IDs are rejected.
+- `POST /api/v1/sessions/{session_id}/hint?school_id=...&student_id=...` and `/resume` — get a hint or continue a persisted lesson.
+- `GET /api/v1/students/{student_id}/learning-profile?school_id=...` — returns scoped concept-level progress and a next-concept recommendation.
+- `GET /api/v1/health` — liveness check; does not reveal configuration.
 
-The engine calls these Frappe whitelisted methods using a dedicated least-privilege Frappe API user: `lms.ai_integration.get_tutor_context`, `lms.ai_integration.save_tutor_event`, and `lms.ai_integration.get_learning_profile`. They are an explicit integration contract, not present in upstream LMS by default. Implement them in the LMS backend using the actual enrollment, tenant, lesson, quiz, and resource doctypes for your deployment. Authenticate the caller as a dedicated integration user, validate its roles and every tenant/student/course relationship on every request, and return only curriculum and embedding-approved media. Never accept a school or student identity as authorization merely because it appears in a request body. A deployment's exact Doctype fields and student-to-school rules must be confirmed before writing that adapter; this engine does not guess them or change LMS authorization rules.
+Responses use validated Pydantic schemas and include the teaching state, localized teacher message, optional curated visual resource, interaction type/options, mastery summary, next action, and LMS sync status. Frappe synchronization uses a SQL outbox so brief LMS outages do not discard local session/progress writes; responses report `sync_status: pending` until retried.
 
-### Frappe payload contract
+## Architecture and limits
 
-`get_tutor_context` accepts the session creation fields and returns a `message` object with `learning_objective` (string), `concept_id` (string), `expected_answer` (string), and optionally `resources` (array). Resource entries may contain `resource_id`, `resource_type`, `youtube_video_id`, `subject`, `topic`, `start_time`, and `embedding_allowed`. Only approved YouTube resources are passed to the client. `save_tutor_event` accepts `{school_id, student_id, session_id, event}`; have Frappe apply its retention and data-minimization policy. `get_learning_profile` accepts the authenticated student's ID and school ID and returns a server-authorized profile. Keep PII, provider credentials, and raw learner identifiers out of model prompts and application logs where possible.
+`app/api/v1` handles authenticated HTTP routes, `app/services/orchestrator.py` runs the short interaction flow, `app/ai/providers` provides mock/OpenAI/Gemini adapters, `app/integrations/frappe_client.py` owns server-to-server calls, and `app/assessment`, `app/teaching`, and `app/resources` contain focused logic. Contact details are redacted before student messages reach a model or persistent history. Model outputs are validated; numerical and choice answers use deterministic grading where possible. Approved media are returned by catalogue ID and video ID only; arbitrary executable HTML is never generated.
 
-## Structure
-
-`app/api/v1` owns HTTP routes, `app/services/orchestrator.py` handles lesson/session state, `app/ai/providers` adapts model providers, `app/integrations/frappe_client.py` owns LMS calls, and `app/assessment` / `app/teaching` / `app/resources` contain focused learning behavior. SQLite/Postgres stores resumable session history. Frappe remains authoritative for learner identity, enrollment, curriculum, approved resources, and learning-profile data.
-
-## Important implementation notes
-
-The included short-answer evaluator is intentionally conservative exact-match scaffolding; replace it with teacher-reviewed, curriculum-specific assessment logic before using it for grades or mastery decisions. The mock provider is for development only. Model output must be reviewed for age appropriateness and factuality. Add migrations and production database backups before deploying schema changes. Validate Frappe adapter permissions and the LMS frontend's server-side authentication before enabling student traffic.
+This is a deployable integration foundation, not a substitute for tenant-specific review. Before real student traffic, test the Frappe role and school mapping in your deployment, provision an encrypted/backup-backed PostgreSQL database, review school consent and retention rules, and have educators validate generated lessons and grading. The mock provider and local SQLite configuration are not production assessment settings; do not use model-generated grades for high-stakes decisions without a teacher-reviewed rubric and validation process.
