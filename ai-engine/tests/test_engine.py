@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from app.assessment.answer_evaluator import evaluate_deterministically
+from app.assessment.answer_evaluator import evaluate_deterministically, validate_model_assessment
 from app.assessment.question_generator import validate_generated_question
 from app.core.database import Base
 from app.core.privacy import redact_student_text
@@ -97,6 +97,22 @@ def test_session_resumes_active_question(db, tutor):
     assert resumed.state == "INTERACTIVE_QUESTION"
     assert resumed.interaction.question_id == initial.interaction.question_id
     assert resumed.wait_for_student is True
+
+
+def test_llm_provider_failure_does_not_create_partial_session(db, tutor):
+    class BrokenProvider:
+        async def explain(self, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    tutor.provider = BrokenProvider()
+    with pytest.raises(RuntimeError):
+        asyncio.run(tutor.start(db, lesson_request()))
+    assert db.query(TutorSession).count() == 0
+
+
+def test_invalid_model_assessment_is_rejected():
+    with pytest.raises(ValueError):
+        validate_model_assessment({"correct": "yes", "feedback": "Try again"})
 
 
 def test_student_pii_is_redacted_before_history_and_provider(db, tutor):
