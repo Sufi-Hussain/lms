@@ -6,7 +6,7 @@ services:
     env_file:
       - ./.env
     environment:
-      DATABASE_URL: ${AI_ENGINE_DATABASE_URL:-sqlite:////srv/ai-engine/data/ai_engine.db}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////srv/ai-engine/data/ai_engine.db}
     expose:
       - "8001"
     volumes:
