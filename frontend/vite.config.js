@@ -37,6 +37,10 @@ function assertFrameworkUiLinked(frontend) {
 export default defineConfig(async ({ mode }) => {
 	assertFrameworkUiLinked(import.meta.dirname)
 	const frappeui = await importFrappeUIPlugin()
+	const commonSiteConfigPath = path.resolve(
+		import.meta.dirname,
+		'../../../../sites/common_site_config.json'
+	)
 
 	const config = {
 		define: {
@@ -51,6 +55,20 @@ export default defineConfig(async ({ mode }) => {
 					indexHtmlPath: '../lms/www/_lms.html',
 				},
 			}),
+			{
+				name: 'lms-dev-root-redirect',
+				configureServer(server) {
+					server.middlewares.use((request, response, next) => {
+						if (request.url === '/') {
+							response.statusCode = 302
+							response.setHeader('Location', '/lms/')
+							response.end()
+							return
+						}
+						next()
+					})
+				},
+			},
 			vue(),
 			dropFrappeUIEsbuildTwin(),
 			VitePWA({
@@ -143,6 +161,14 @@ export default defineConfig(async ({ mode }) => {
 			preserveSymlinks: true,
 			alias: {
 				'@': path.resolve(import.meta.dirname, 'src'),
+				...(fs.existsSync(commonSiteConfigPath)
+					? {}
+					: {
+							'../../../../sites/common_site_config.json': path.resolve(
+								import.meta.dirname,
+								'src/vite-site-config.json'
+							),
+						}),
 			},
 			// Force one copy of prosemirror; duplicate copies break tiptap's
 			// instanceof checks and crash the list buttons.
