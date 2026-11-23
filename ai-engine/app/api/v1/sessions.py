@@ -105,15 +105,21 @@ async def _queue_and_sync(
 
 
 async def _load_owned_session(
-    db: Session, session_id: str, school_id: str, student_id: str
+    db: Session,
+    session_id: str,
+    school_id: str,
+    student_id: str,
+    *,
+    for_update: bool = False,
 ) -> TutorSession:
-    session = db.scalar(
-        select(TutorSession).where(
-            TutorSession.id == session_id,
-            TutorSession.school_id == school_id,
-            TutorSession.student_id == student_id,
-        )
+    statement = select(TutorSession).where(
+        TutorSession.id == session_id,
+        TutorSession.school_id == school_id,
+        TutorSession.student_id == student_id,
     )
+    if for_update:
+        statement = statement.with_for_update()
+    session = db.scalar(statement)
     if not session:
         try:
             snapshot = await frappe_client.get_tutor_session(
@@ -212,7 +218,7 @@ async def message(
     student_id: str = Query(min_length=1, max_length=140),
     db: Session = Depends(get_db),
 ):
-    session = await _load_owned_session(db, session_id, school_id, student_id)
+    session = await _load_owned_session(db, session_id, school_id, student_id, for_update=True)
     try:
         response = await orchestrator.message(db, session, payload.text)
         return await _queue_and_sync(db, session, "lesson_message", response)
@@ -232,7 +238,7 @@ async def answer(
     student_id: str = Query(min_length=1, max_length=140),
     db: Session = Depends(get_db),
 ):
-    session = await _load_owned_session(db, session_id, school_id, student_id)
+    session = await _load_owned_session(db, session_id, school_id, student_id, for_update=True)
     try:
         response = await orchestrator.answer(db, session, payload.question_id, payload.answer)
         return await _queue_and_sync(db, session, "assessment", response)
@@ -251,7 +257,7 @@ async def hint(
     student_id: str = Query(min_length=1, max_length=140),
     db: Session = Depends(get_db),
 ):
-    session = await _load_owned_session(db, session_id, school_id, student_id)
+    session = await _load_owned_session(db, session_id, school_id, student_id, for_update=True)
     try:
         response = orchestrator.hint(db, session)
         return await _queue_and_sync(db, session, "hint", response)
@@ -270,7 +276,7 @@ async def resume(
     student_id: str = Query(min_length=1, max_length=140),
     db: Session = Depends(get_db),
 ):
-    session = await _load_owned_session(db, session_id, school_id, student_id)
+    session = await _load_owned_session(db, session_id, school_id, student_id, for_update=True)
     try:
         response = await orchestrator.resume(db, session)
         return await _queue_and_sync(db, session, "session_resumed", response)

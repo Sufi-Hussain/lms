@@ -44,6 +44,7 @@ class OpenAIProvider:
             payload={
                 "model": settings.openai_model,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                "max_completion_tokens": 512,
             },
         )
         return self._content(result)
@@ -75,6 +76,7 @@ class OpenAIProvider:
                 "model": settings.openai_model,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 "response_format": {"type": "json_object"},
+                "max_completion_tokens": 800,
             },
         )
         return self._content(result)
@@ -111,6 +113,7 @@ class OpenAIProvider:
                 "model": settings.openai_model,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 "response_format": {"type": "json_object"},
+                "max_completion_tokens": 800,
             },
         )
         return self._content(result)
