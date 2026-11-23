@@ -1,0 +1,115 @@
+{
+  "note": "Proposed custom DocType fields, not upstream LMS DocTypes. Review and create these in the LMS app before enabling the sample bridge. The bridge relies on the existing LMS Enrollment.member, course, and member_type fields.",
+  "doctypes": [
+    {
+      "name": "AI Student School Access",
+      "module": "LMS",
+      "istable": false,
+      "fields": [
+        {"fieldname": "student", "fieldtype": "Link", "options": "User", "reqd": true, "in_list_view": true},
+        {"fieldname": "school_id", "fieldtype": "Data", "reqd": true, "in_list_view": true},
+        {"fieldname": "course", "fieldtype": "Link", "options": "LMS Course", "reqd": true, "in_list_view": true},
+        {"fieldname": "enabled", "fieldtype": "Check", "default": 1, "reqd": true}
+      ],
+      "indexes": [["student", "school_id", "course", "enabled"]],
+      "permissions": "Only LMS System Managers may create or edit. The AI Engine Service role gets read/select only. Populate grants from trusted school membership data."
+    },
+    {
+      "name": "AI Curriculum Concept",
+      "module": "LMS",
+      "istable": false,
+      "fields": [
+        {"fieldname": "course", "fieldtype": "Link", "options": "LMS Course", "reqd": true, "in_list_view": true},
+        {"fieldname": "board", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "class_level", "fieldtype": "Int", "reqd": true},
+        {"fieldname": "chapter", "fieldtype": "Link", "options": "Course Chapter", "reqd": true},
+        {"fieldname": "topic", "fieldtype": "Data", "reqd": true, "in_list_view": true},
+        {"fieldname": "subject", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "sequence", "fieldtype": "Int", "default": 0},
+        {"fieldname": "learning_objective", "fieldtype": "Small Text", "reqd": true},
+        {"fieldname": "enabled", "fieldtype": "Check", "default": 1, "reqd": true}
+      ],
+      "indexes": [["course", "chapter", "topic", "enabled"], ["course", "sequence"]],
+      "permissions": "Only LMS System Managers, Course Creators, or designated curriculum editors may create or edit. AI Engine Service gets read/select only."
+    },
+    {
+      "name": "AI Educational Resource",
+      "module": "LMS",
+      "istable": false,
+      "fields": [
+        {"fieldname": "concept", "fieldtype": "Link", "options": "AI Curriculum Concept", "reqd": true, "in_list_view": true},
+        {"fieldname": "resource_id", "fieldtype": "Data", "reqd": true, "unique": true},
+        {"fieldname": "resource_type", "fieldtype": "Select", "options": "youtube\ndiagram\nanimation\nsimulation", "reqd": true},
+        {"fieldname": "title", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "subject", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "board", "fieldtype": "Data"},
+        {"fieldname": "class_level", "fieldtype": "Int"},
+        {"fieldname": "chapter", "fieldtype": "Link", "options": "Course Chapter"},
+        {"fieldname": "topic", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "learning_objective", "fieldtype": "Small Text"},
+        {"fieldname": "youtube_video_id", "fieldtype": "Data", "description": "YouTube video ID only, never an arbitrary URL."},
+        {"fieldname": "start_time", "fieldtype": "Int", "default": 0},
+        {"fieldname": "duration", "fieldtype": "Int"},
+        {"fieldname": "language", "fieldtype": "Data"},
+        {"fieldname": "difficulty", "fieldtype": "Select", "options": "foundation\nintermediate\nadvanced"},
+        {"fieldname": "embedding_allowed", "fieldtype": "Check", "default": 0, "reqd": true},
+        {"fieldname": "enabled", "fieldtype": "Check", "default": 1, "reqd": true}
+      ],
+      "indexes": [["concept", "enabled", "embedding_allowed"], ["subject", "class_level", "topic"]],
+      "permissions": "Curriculum editors approve each embedding_allowed resource. AI Engine Service gets read/select only. Only approved YouTube IDs are returned; diagrams and simulations are returned as catalogue IDs for a future renderer."
+    },
+    {
+      "name": "AI Tutor Session",
+      "module": "LMS",
+      "istable": false,
+      "autoname": "hash",
+      "fields": [
+        {"fieldname": "session_id", "fieldtype": "Data", "reqd": true, "unique": true, "in_list_view": true},
+        {"fieldname": "school_id", "fieldtype": "Data", "reqd": true, "in_list_view": true},
+        {"fieldname": "student", "fieldtype": "Link", "options": "User", "reqd": true, "in_list_view": true},
+        {"fieldname": "course", "fieldtype": "Link", "options": "LMS Course", "reqd": true},
+        {"fieldname": "subject", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "chapter", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "topic", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "state", "fieldtype": "Data", "reqd": true},
+        {"fieldname": "completed", "fieldtype": "Check", "default": 0, "reqd": true},
+        {"fieldname": "snapshot_updated_at", "fieldtype": "Datetime", "reqd": true},
+        {"fieldname": "session_json", "fieldtype": "Code", "reqd": true}
+      ],
+      "indexes": [["school_id", "student", "course"], ["completed", "state"]],
+      "permissions": "Only LMS System Managers may read. AI Engine Service may create and update. The JSON snapshot contains sanitized conversation history and private assessment keys; never expose it directly to student-facing clients."
+    },
+    {
+      "name": "AI Tutor Event",
+      "module": "LMS",
+      "istable": false,
+      "autoname": "hash",
+      "fields": [
+        {"fieldname": "event_id", "fieldtype": "Data", "reqd": true, "unique": true, "in_list_view": true},
+        {"fieldname": "event_type", "fieldtype": "Select", "options": "session_started\nlesson_message\nassessment\nhint\nsession_resumed", "reqd": true},
+        {"fieldname": "concept_id", "fieldtype": "Data"},
+        {"fieldname": "school_id", "fieldtype": "Data", "reqd": true, "in_list_view": true},
+        {"fieldname": "student", "fieldtype": "Link", "options": "User", "reqd": true},
+        {"fieldname": "course", "fieldtype": "Link", "options": "LMS Course", "reqd": true},
+        {"fieldname": "session_id", "fieldtype": "Data", "reqd": true, "in_list_view": true},
+        {"fieldname": "event_json", "fieldtype": "Code", "reqd": true}
+      ],
+      "indexes": [["school_id", "student", "session_id"], ["event_type", "concept_id"]],
+      "permissions": "Only LMS System Managers may read; AI Engine Service may create. Event JSON stores assessment summaries, never raw learner responses. Apply a school-approved retention policy."
+    },
+    {
+      "name": "AI Student Learning Profile",
+      "module": "LMS",
+      "istable": false,
+      "autoname": "hash",
+      "fields": [
+        {"fieldname": "profile_key", "fieldtype": "Data", "reqd": true, "unique": true, "hidden": true},
+        {"fieldname": "student", "fieldtype": "Link", "options": "User", "reqd": true, "in_list_view": true},
+        {"fieldname": "school_id", "fieldtype": "Data", "reqd": true, "in_list_view": true},
+        {"fieldname": "profile_json", "fieldtype": "Code", "reqd": true}
+      ],
+      "indexes": [["student", "school_id"]],
+      "permissions": "Only LMS System Managers may read or edit. The sample bridge updates concept-level attempts, mastery summaries, and next-concept recommendations."
+    }
+  ]
+}

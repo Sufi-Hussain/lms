@@ -1,0 +1,29 @@
+services:
+  ai-engine:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////srv/ai-engine/data/ai_engine.db}
+    expose:
+      - "8001"
+    volumes:
+      - ai-engine-data:/srv/ai-engine/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/v1/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - frappe-internal
+
+volumes:
+  ai-engine-data:
+
+networks:
+  frappe-internal:
+    external: true
+    name: ${FRAPPE_DOCKER_NETWORK:?Set this to the existing Frappe Compose network name}

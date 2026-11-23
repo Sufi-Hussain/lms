@@ -19,3 +19,9 @@ test-results
 playwright-report
 blob-report
 playwright/.auth
+
+# AI engine local state
+ai-engine/.venv/
+ai-engine/.pytest_cache/
+ai-engine/data/
+ai-engine/.env
