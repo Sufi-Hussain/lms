@@ -11,18 +11,29 @@ This repository contains the upstream `LMS Enrollment` DocType with `member`, `c
 ```sh
 cd ai-engine
 cp .env.example .env
-# Set SERVICE_TOKEN and Frappe credentials; keep .env private.
+# Replace SERVICE_TOKEN with a private random value; keep .env private.
+# FRAPPE_MODE=mock and LLM_PROVIDER=mock need no external credentials.
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8001
 ```
 
+`FRAPPE_MODE=mock` provides a local, in-memory LMS adapter with sample lesson objectives and tenant-scoped session/progress storage. It lets you exercise session creation, answers, hints, resume, and learning profiles without a running Frappe backend or Frappe API credentials. Mock mode accepts the student/school/course identifiers supplied by the trusted service caller; it is for local development only and must not be used with student traffic. It deliberately returns no YouTube resources: real deployments select only approved entries returned by Frappe's catalogue. The API still requires a non-empty `SERVICE_TOKEN` in mock mode.
+
 The default `LLM_PROVIDER=mock` requires no model key and is for development/testing only. Set `LLM_PROVIDER=openai` with `OPENAI_API_KEY`, or `LLM_PROVIDER=gemini` with `GEMINI_API_KEY`. Provider/model names and request timeouts are environment-configurable. SQLite is for local/single-instance development; configure PostgreSQL for a shared deployment. Health is `GET /api/v1/health`; OpenAPI docs are available at `/docs`. The docs route is not separately authenticated, so keep the service and documentation on a private network.
+
+To start a mock lesson, call `POST /api/v1/sessions` with the token from `.env` and a demo enrollment scope:
+
+```sh
+curl --fail-with-body -X POST 'http://localhost:8001/api/v1/sessions' -H 'Authorization: Bearer <SERVICE_TOKEN>' -H 'Content-Type: application/json' -d '{"student_id":"demo-student","school_id":"demo-school","course_id":"demo-course","subject":"Science","chapter":"Forces","topic":"Gravity","language":"en"}'
+```
+
+Use the returned `session_id` and `interaction.question_id` with `POST /api/v1/sessions/{session_id}/answer?school_id=demo-school&student_id=demo-student`; responses include the next interaction and mastery update. The mock adapter is also covered by an automated end-to-end API test.
 
 ## Docker Compose
 
-From `ai-engine/`, copy `.env.example` to `.env`; configure a long random `SERVICE_TOKEN`, the dedicated Frappe API key/secret, and the existing Frappe Compose network. For this repository's Compose project name `lms`, the default network is normally `lms_default`; verify the actual network name in your deployment. Then run:
+From `ai-engine/`, copy `.env.example` to `.env`; configure a long random `SERVICE_TOKEN` and the existing Frappe Compose network. For a real LMS connection, set `FRAPPE_MODE=live` and configure the dedicated Frappe API key/secret. For this repository's Compose project name `lms`, the default network is normally `lms_default`; verify the actual network name in your deployment. Then run:
 
 ```sh
 docker compose -f docker-compose.ai-engine.yml up -d --build

@@ -1,10 +1,13 @@
 from functools import lru_cache
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     service_token: str = ""
+    frappe_mode: Literal["mock", "live"] = "live"
     frappe_url: str = ""
     frappe_api_key: str = ""
     frappe_api_secret: str = ""

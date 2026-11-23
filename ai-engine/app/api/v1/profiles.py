@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.rate_limit import enforce_rate_limit
 from app.core.security import require_service_token
-from app.integrations.frappe_client import FrappeClient
+from app.integrations.client import frappe_client
 from app.models.schemas import LearningProfile
 
 
@@ -12,9 +12,6 @@ router = APIRouter(
     dependencies=[Depends(require_service_token), Depends(enforce_rate_limit)],
     tags=["learning profiles"],
 )
-frappe_client = FrappeClient()
-
-
 @router.get("/students/{student_id}/learning-profile", response_model=LearningProfile)
 async def get_learning_profile(
     student_id: str,

@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import enforce_rate_limit
 from app.core.security import require_service_token
-from app.integrations.frappe_client import FrappeClient
+from app.integrations.client import frappe_client
 from app.models.outbox import TutorOutboxEvent
 from app.models.schemas import AnswerInput, MessageInput, SessionCreate, SessionView, TutorResponse
 from app.models.session import TutorSession
@@ -22,7 +22,6 @@ router = APIRouter(
     dependencies=[Depends(require_service_token), Depends(enforce_rate_limit)],
     tags=["tutor sessions"],
 )
-frappe_client = FrappeClient()
 orchestrator = TutorOrchestrator(frappe_client)
 
 

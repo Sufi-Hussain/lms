@@ -6,11 +6,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
-from app.integrations.frappe_client import FrappeClient
+from app.integrations.client import frappe_client
 from app.models.outbox import TutorOutboxEvent
 
 logger = logging.getLogger(__name__)
-frappe_client = FrappeClient()
 
 
 async def deliver_one(db: Session, item: TutorOutboxEvent) -> bool:
