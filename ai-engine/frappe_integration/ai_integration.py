@@ -190,8 +190,8 @@ def save_tutor_session(
         "snapshot_updated_at": snapshot_time,
         "session_json": json.dumps(snapshot, ensure_ascii=False),
     }
-    if existing_name:
-        doc = frappe.get_doc("AI Tutor Session", existing_name)
+    if existing:
+        doc = frappe.get_doc("AI Tutor Session", existing.name)
         if get_datetime(doc.snapshot_updated_at) >= snapshot_time:
             return {"saved": True, "duplicate": True, "session_id": session_id}
         doc.update(values)
@@ -341,9 +341,25 @@ def save_tutor_event(
         frappe.throw(_("Invalid or oversized event"), frappe.ValidationError)
     event["event_id"] = _validate_text(event["event_id"], "event id", 140)
 
-    existing = frappe.db.get_value("AI Tutor Event", {"event_id": event["event_id"]}, "name")
+    existing = frappe.db.get_value(
+        "AI Tutor Event",
+        {"event_id": event["event_id"]},
+        ["name", "school_id", "student", "session_id"],
+        as_dict=True,
+    )
     if existing:
-        return {"saved": True, "event_id": existing, "duplicate": True}
+        if (
+            existing.school_id != school_id
+            or existing.student != student_id
+            or existing.session_id != session_id
+        ):
+            frappe.throw(_("Event scope mismatch"), frappe.PermissionError)
+        return {"saved": True, "event_id": existing.name, "duplicate": True}
+    if not frappe.db.exists(
+        "AI Tutor Session",
+        {"session_id": session_id, "school_id": school_id, "student": student_id, "course": course_id},
+    ):
+        frappe.throw(_("Session not found"), frappe.DoesNotExistError)
 
     row = frappe.get_doc(
         {
