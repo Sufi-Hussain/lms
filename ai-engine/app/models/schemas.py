@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SessionCreate(BaseModel):
@@ -13,7 +13,12 @@ class SessionCreate(BaseModel):
     subject: str = Field(min_length=1, max_length=80)
     chapter: str = Field(min_length=1, max_length=200)
     topic: str = Field(min_length=1, max_length=200)
-    language: str = Field(default="en", min_length=2, max_length=24)
+    language: str = Field(
+        default="en",
+        min_length=2,
+        max_length=24,
+        pattern=r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$",
+    )
 
 
 class MessageInput(BaseModel):
@@ -41,6 +46,21 @@ class Interaction(BaseModel):
     options: list[QuestionOption] = Field(default_factory=list, max_length=6)
     hint_available: bool = True
 
+    @model_validator(mode="after")
+    def validate_answer_type(self):
+        choice_question = self.type in {"mcq", "assertion_reason"}
+        if choice_question != (self.answer_type == "choice"):
+            raise ValueError("Question type and answer type do not match")
+        if choice_question and len(self.options) < 2:
+            raise ValueError("Choice questions need at least two options")
+        if not choice_question and self.options:
+            raise ValueError("Only choice questions may include options")
+        if self.type == "numerical" and self.answer_type != "number":
+            raise ValueError("Numerical questions require numeric answers")
+        if self.type in {"short_answer", "fill_in_blank"} and self.answer_type != "short_text":
+            raise ValueError("Text questions require text answers")
+        return self
+
 
 class TeacherMessage(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
@@ -56,6 +76,14 @@ class VisualResource(BaseModel):
     start_time: int = Field(default=0, ge=0)
     duration: int | None = Field(default=None, ge=0)
     language: str | None = Field(default=None, max_length=24)
+
+    @model_validator(mode="after")
+    def validate_video_reference(self):
+        if self.type == "youtube" and self.video_id is None:
+            raise ValueError("YouTube resources require an approved video ID")
+        if self.type != "youtube" and self.video_id is not None:
+            raise ValueError("Non-video resources cannot include a YouTube ID")
+        return self
 
 
 class MasteryUpdate(BaseModel):
@@ -91,6 +119,14 @@ class TutorResponse(BaseModel):
     next_action: Literal["WAIT_FOR_ANSWER", "CONTINUE_LESSON", "COMPLETE"]
     completed: bool = False
     sync_status: Literal["synced", "pending"] = "synced"
+
+    @model_validator(mode="after")
+    def validate_state(self):
+        if self.completed != (self.state == "COMPLETED"):
+            raise ValueError("Completion flag and state must agree")
+        if self.wait_for_student != (self.interaction is not None):
+            raise ValueError("Student wait flag and interaction must agree")
+        return self
 
 
 class SessionView(BaseModel):

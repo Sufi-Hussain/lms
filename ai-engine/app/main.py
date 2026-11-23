@@ -8,11 +8,12 @@ from fastapi.responses import JSONResponse
 from app.api.v1.profiles import router as profiles_router
 from app.api.v1.sessions import router as sessions_router
 from app.core.database import Base, engine
+from app.core.logging import configure_logging
 from app.models import outbox as outbox_model
 from app.models import session as session_model
 from app.services.outbox import run_outbox_worker
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+configure_logging()
 
 
 @asynccontextmanager

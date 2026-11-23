@@ -17,6 +17,7 @@ from app.services.orchestrator import InactiveQuestionError, TutorOrchestrator
 from app.services.outbox import deliver_items
 
 router = APIRouter(
+    prefix="/api/v1",
     dependencies=[Depends(require_service_token), Depends(enforce_rate_limit)],
     tags=["tutor sessions"],
 )

@@ -136,7 +136,7 @@ def _validate_snapshot(snapshot, student_id, school_id, course_id, session_id):
         or snapshot["session_id"] != session_id
     ):
         frappe.throw(_("Session scope mismatch"), frappe.PermissionError)
-    if len(json.dumps(snapshot, ensure_ascii=False)) > 100000:
+    if len(json.dumps(snapshot, ensure_ascii=False)) > 160000:
         frappe.throw(_("Session snapshot is too large"), frappe.ValidationError)
     if not isinstance(snapshot["history"], list) or len(snapshot["history"]) > 200:
         frappe.throw(_("Invalid session history"), frappe.ValidationError)
@@ -166,7 +166,18 @@ def save_tutor_session(
             frappe.throw(_("Invalid session JSON"), frappe.ValidationError)
     _validate_snapshot(snapshot, student_id, school_id, course_id, session_id)
     snapshot_time = get_datetime(snapshot["updated_at"])
-    existing_name = frappe.db.get_value("AI Tutor Session", {"session_id": session_id}, "name")
+    existing = frappe.db.get_value(
+        "AI Tutor Session",
+        {"session_id": session_id},
+        ["name", "school_id", "student", "course"],
+        as_dict=True,
+    )
+    if existing and (
+        existing.school_id != school_id
+        or existing.student != student_id
+        or existing.course != course_id
+    ):
+        frappe.throw(_("Session scope mismatch"), frappe.PermissionError)
     values = {
         "school_id": school_id,
         "student": student_id,

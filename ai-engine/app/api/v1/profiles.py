@@ -8,6 +8,7 @@ from app.models.schemas import LearningProfile
 
 
 router = APIRouter(
+    prefix="/api/v1",
     dependencies=[Depends(require_service_token), Depends(enforce_rate_limit)],
     tags=["learning profiles"],
 )

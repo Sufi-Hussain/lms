@@ -1,7 +1,5 @@
 import uuid
-from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.providers import get_provider
@@ -39,6 +37,26 @@ def deterministic_feedback(correct: bool, language: str) -> str:
     return pair[0 if correct else 1]
 
 
+def completion_summary(correct_attempts: int, attempts: int, language: str) -> str:
+    language_key = language.split("-")[0].lower()
+    templates = {
+        "en": "Lesson complete. You answered {correct} of {attempts} attempts correctly and met the mastery goal.",
+        "hi": "पाठ पूरा हुआ। आपने {attempts} में से {correct} प्रयासों के सही उत्तर दिए और सीखने का लक्ष्य पूरा किया।",
+        "es": "Lección completada. Respondiste correctamente {correct} de {attempts} intentos y alcanzaste el objetivo.",
+    }
+    template = templates.get(language_key, templates["en"])
+    return template.format(correct=correct_attempts, attempts=attempts)
+
+
+def resume_message(language: str) -> str:
+    messages = {
+        "en": "Your lesson is ready to continue.",
+        "hi": "आपका पाठ जारी रखने के लिए तैयार है।",
+        "es": "Tu lección está lista para continuar.",
+    }
+    return messages.get(language.split("-")[0].lower(), messages["en"])
+
+
 class TutorOrchestrator:
     def __init__(self, frappe_client):
         self.frappe = frappe_client
@@ -46,6 +64,7 @@ class TutorOrchestrator:
 
     async def start(self, db: Session, data: SessionCreate) -> TutorResponse:
         context = await self.frappe.get_lesson_context(data.model_dump())
+        context = {**context, "chapter": data.chapter, "topic": data.topic}
         objective = self._objective(context)
         language = data.language
         difficulty = "foundation"
@@ -73,6 +92,9 @@ class TutorOrchestrator:
         context = {
             **{key: value for key, value in context.items() if key != "resources"},
             "language": language,
+            "subject": data.subject,
+            "chapter": data.chapter,
+            "topic": data.topic,
             "visual_resource": visual_resource,
             "active_question": question,
             "previous_questions": [question["question"]],
@@ -155,6 +177,8 @@ class TutorOrchestrator:
             score = session.correct_attempts / session.attempts
             mastered = streak >= 3 and score >= 0.8
 
+        if mastered:
+            teacher_message = f"{teacher_message}\n\n{completion_summary(session.correct_attempts, session.attempts, context.get('language', 'en'))}"
         session.context = context
         self._append_history(session, teacher_message, student_text=safe_answer)
         session.state = "COMPLETED" if mastered else ("PRACTICE" if correct else "REMEDIATION")
@@ -208,7 +232,11 @@ class TutorOrchestrator:
     async def resume(self, db: Session, session: TutorSession) -> TutorResponse:
         if session.completed:
             score = session.correct_attempts / session.attempts if session.attempts else 0.0
-            message = "You have completed this lesson. Your progress is saved."
+            message = completion_summary(
+                session.correct_attempts,
+                session.attempts,
+                session.context.get("language", "en"),
+            )
             return self._response(
                 session,
                 message,
@@ -224,7 +252,7 @@ class TutorOrchestrator:
             )
             self._set_active_question(session, question)
         session.state = "INTERACTIVE_QUESTION"
-        return self._response(session, "Your lesson is ready to continue.")
+        return self._response(session, resume_message(session.context.get("language", "en")))
 
     async def _generate_question(
         self, *, objective: str, difficulty: str, language: str, previous_questions: list[str]
@@ -244,7 +272,16 @@ class TutorOrchestrator:
         objective = context.get("learning_objective")
         if not isinstance(objective, str) or not objective.strip():
             raise ValueError("The LMS returned no published learning objective")
-        return objective.strip()[:4000]
+        scope = [
+            ("Board", context.get("board")),
+            ("Class", context.get("class_level")),
+            ("Subject", context.get("subject")),
+            ("Chapter", context.get("chapter")),
+            ("Topic", context.get("topic")),
+        ]
+        details = [f"{label}: {value}" for label, value in scope if value not in (None, "")]
+        details.append(f"Learning objective: {objective.strip()}")
+        return "\n".join(details)[:4000]
 
     @staticmethod
     def _ensure_active(session: TutorSession) -> None:
@@ -266,9 +303,9 @@ class TutorOrchestrator:
     ) -> None:
         additions = []
         if student_text is not None:
-            additions.append({"role": "student", "text": student_text[:4000]})
-        additions.append({"role": "teacher", "text": teacher_message[:4000]})
-        session.history = [*session.history, *additions][-200:]
+            additions.append({"role": "student", "text": student_text[:1200]})
+        additions.append({"role": "teacher", "text": teacher_message[:1200]})
+        session.history = [*session.history, *additions][-80:]
 
     @staticmethod
     def _mastery(
@@ -319,7 +356,7 @@ class TutorOrchestrator:
             teacher_message=TeacherMessage(
                 text=teacher_message[:5000],
                 language=session.context.get("language", "en"),
-                format="plain_text",
+                format="markdown",
             ),
             visual=visual,
             interaction=interaction,

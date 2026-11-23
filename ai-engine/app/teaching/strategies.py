@@ -1,5 +1,5 @@
 STRATEGIES = {
-    "INTRODUCTION": "Use a familiar real-world analogy, then define the idea.",
+    "INTRODUCTION": "Briefly introduce the idea, explain it in simple language, and include one relevant real-world example. Keep it concise and do not ask a question; the application will ask one next.",
     "EXPLANATION": "Explain one step at a time in simple language.",
     "EXAMPLE": "Give one worked, age-appropriate example.",
     "REMEDIATION": "Address the likely misconception gently and use a different analogy.",
